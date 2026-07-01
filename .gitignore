@@ -1,0 +1,14 @@
+# Build output
+/bin/
+/dist/
+/lazy-openspec
+
+# Go
+*.test
+*.out
+coverage.*
+
+# Local tooling / editor
+.claude/
+.DS_Store
+*.swp
