@@ -104,12 +104,15 @@ func (m Model) specsList(width int) (string, int) {
 		if sel {
 			focusLine = len(lines)
 		}
-		text := fmt.Sprintf("▪ %s  %dr", s.Name, s.RequirementCount)
+		count := fmt.Sprintf("%dr", s.RequirementCount)
 		if sel && m.focus == panelSpecs {
+			text := fmt.Sprintf("▪ %s  %s", s.Name, count)
 			lines = append(lines, selectedItem.Render(fit(text, width)))
 		} else {
+			// Overhead is "▪ " (2) + "  " (2) + the count; truncate the name to fit.
+			name := trunc(s.Name, width-4-len([]rune(count)))
 			lines = append(lines, fmt.Sprintf("%s %s  %s",
-				lipglossColor("39", "▪"), s.Name, faint(fmt.Sprintf("%dr", s.RequirementCount))))
+				lipglossColor("6", "▪"), name, faint(count)))
 		}
 	}
 	return strings.Join(lines, "\n"), focusLine
@@ -126,11 +129,11 @@ func (m Model) archiveList(width int) (string, int) {
 		if sel {
 			focusLine = len(lines)
 		}
-		text := "▫ " + c.Name
 		if sel && m.focus == panelArchive {
-			lines = append(lines, selectedItem.Render(fit(text, width)))
+			lines = append(lines, selectedItem.Render(fit("▫ "+c.Name, width)))
 		} else {
-			lines = append(lines, faint(text))
+			// Overhead is "▫ " (2); truncate the name to fit.
+			lines = append(lines, faint("▫ "+trunc(c.Name, width-2)))
 		}
 	}
 	return strings.Join(lines, "\n"), focusLine
@@ -148,20 +151,21 @@ func changeRow(c openspec.ChangeSummary, width int, selected bool) string {
 	if c.Lifecycle() == openspec.Active {
 		suffix = fmt.Sprintf(" %d%%", c.Percent())
 	}
-	text := glyph + " " + c.Name + suffix
 	if selected {
-		return selectedItem.Render(fit(text, width))
+		return selectedItem.Render(fit(glyph+" "+c.Name+suffix, width))
 	}
 	cg := glyph
 	switch c.Lifecycle() {
 	case openspec.Active:
-		cg = lipglossColor("214", glyph)
+		cg = lipglossColor("3", glyph)
 	case openspec.Completed:
-		cg = lipglossColor("42", glyph)
+		cg = lipglossColor("2", glyph)
 	default:
 		cg = mutedText.Render(glyph)
 	}
-	return cg + " " + c.Name + faint(suffix)
+	// Overhead is the glyph (1) + a space (1) + the suffix; truncate the name to fit.
+	name := trunc(c.Name, width-2-len([]rune(suffix)))
+	return cg + " " + name + faint(suffix)
 }
 
 func groupName(lc openspec.Lifecycle) string {
@@ -184,6 +188,7 @@ func (m Model) renderMain(d dims) string {
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(borderColor(focused)).
+		Padding(0, 1).
 		Width(d.mainW - 2).
 		Height(d.bodyH - 2).
 		MaxWidth(d.mainW).
@@ -248,12 +253,13 @@ func (m Model) renderLog(d dims) string {
 	}
 	title := logTitle.Render("Command log")
 	if m.running {
-		title += " " + lipglossColor("214", "● running")
+		title += " " + lipglossColor("3", "● running")
 	}
 	innerStr := title + "\n" + strings.Join(shown, "\n")
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(colBorder).
+		BorderForeground(colNone).
+		Padding(0, 1).
 		Width(m.width - 2).
 		Height(d.logH - 2).
 		MaxWidth(m.width).
@@ -319,6 +325,9 @@ func helpBody(entries []binding) string {
 
 // fit truncates or right-pads plain text to exactly width columns.
 func fit(s string, width int) string {
+	if width < 0 {
+		width = 0
+	}
 	r := []rune(s)
 	if len(r) > width {
 		if width <= 1 {
@@ -327,6 +336,23 @@ func fit(s string, width int) string {
 		return string(r[:width-1]) + "…"
 	}
 	return s + strings.Repeat(" ", width-len(r))
+}
+
+// trunc shortens plain text to at most width columns, adding an ellipsis when it
+// overflows. Unlike fit it does not right-pad, so uncolored rows keep their
+// natural length while still never exceeding the panel width.
+func trunc(s string, width int) string {
+	if width < 0 {
+		width = 0
+	}
+	r := []rune(s)
+	if len(r) <= width {
+		return s
+	}
+	if width <= 1 {
+		return string(r[:width])
+	}
+	return string(r[:width-1]) + "…"
 }
 
 // windowLines returns a slice of s's lines that fits height, keeping the focus

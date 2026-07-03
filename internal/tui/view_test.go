@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/itslame/lazy-openspec/internal/openspec"
 )
 
@@ -51,6 +52,54 @@ func TestNavigateAndOpenDoesNotPanic(t *testing.T) {
 	for _, k := range []string{"down", "2", "1", "enter", "]", "]", "]", "[", "esc", "?"} {
 		m = feed(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(k)})
 		_ = m.View()
+	}
+}
+
+// TestOpenSpecRendersRequirements pins the spec-navigation regression: opening a
+// spec must load its requirements rather than stay on the loading placeholder.
+func TestOpenSpecRendersRequirements(t *testing.T) {
+	m := seeded()
+	m = feed(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("2")}) // focus Specs
+	m = feed(m, tea.KeyMsg{Type: tea.KeyEnter})                     // open spec -> loading
+	if !strings.Contains(m.View(), "Loading spec") {
+		t.Fatalf("expected loading placeholder before detail arrives:\n%s", m.View())
+	}
+	m = feed(m, specDetailMsg{id: "auth", detail: openspec.SpecDetail{
+		ID: "auth", Name: "auth",
+		Requirements: []openspec.Requirement{{
+			Text:      "The system SHALL authenticate the user",
+			Scenarios: []openspec.Scenario{{RawText: "- **WHEN** a user logs in\n- **THEN** a session is created"}},
+		}},
+	}})
+	out := m.View()
+	if strings.Contains(out, "Loading spec") {
+		t.Fatalf("spec detail still stuck on loading placeholder:\n%s", out)
+	}
+	if !strings.Contains(out, "SHALL authenticate") {
+		t.Fatalf("requirement text not rendered:\n%s", out)
+	}
+}
+
+// TestBordersHoldWithLongNames guards the border-integrity fix: no rendered line
+// may exceed the terminal width, even when change/spec names overflow the panel.
+func TestBordersHoldWithLongNames(t *testing.T) {
+	longChange := "add-a-really-long-change-name-that-would-overflow-the-panel"
+	longSpec := "a-really-long-spec-capability-name-that-overflows-the-narrow-panel"
+	for _, size := range []struct{ w, h int }{{60, 18}, {100, 32}} {
+		m := New(openspec.New())
+		m = feed(m, tea.WindowSizeMsg{Width: size.w, Height: size.h})
+		m = feed(m, changesMsg{list: openspec.ChangeList{
+			Changes: []openspec.ChangeSummary{{Name: longChange, CompletedTasks: 1, TotalTasks: 4}},
+			Root:    openspec.Root{Path: "/tmp"},
+		}})
+		m = feed(m, specsMsg{list: openspec.SpecList{
+			Specs: []openspec.SpecSummary{{Name: longSpec, RequirementCount: 7}},
+		}})
+		for i, ln := range strings.Split(m.View(), "\n") {
+			if got := lipgloss.Width(ln); got > size.w {
+				t.Errorf("size %dx%d: line %d width %d exceeds %d: %q", size.w, size.h, i, got, size.w, ln)
+			}
+		}
 	}
 }
 

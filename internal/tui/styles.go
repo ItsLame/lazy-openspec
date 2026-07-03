@@ -2,41 +2,46 @@ package tui
 
 import "github.com/charmbracelet/lipgloss"
 
-// Style palette. Colors degrade automatically on NO_COLOR terminals via termenv.
+// Style palette. Colors are drawn from the terminal's ANSI 16-color palette
+// (indices 0-15) and the terminal default (unset) foreground, so the interface
+// follows the user's terminal theme like lazygit/lazydocker rather than pinning
+// fixed xterm-256 colors. Colors degrade automatically on NO_COLOR terminals via
+// termenv. colNone is the unset/"default" color: it inherits the terminal's own
+// foreground.
 var (
-	colBorder  = lipgloss.Color("240")
-	colFocus   = lipgloss.Color("39")
-	colMuted   = lipgloss.Color("246")
-	colTitle   = lipgloss.Color("39")
-	colDraft   = lipgloss.Color("246")
-	colActive  = lipgloss.Color("214")
-	colDone    = lipgloss.Color("42")
-	colErr     = lipgloss.Color("203")
-	colSelBg   = lipgloss.Color("236")
-	colSelFg   = lipgloss.Color("255")
-	colHintKey = lipgloss.Color("39")
+	colNone   = lipgloss.NoColor{}   // terminal default (inherits fg/bg)
+	colFocus  = lipgloss.Color("2")  // active border: green
+	colTitle  = lipgloss.Color("6")  // titles/accents: cyan
+	colActive = lipgloss.Color("3")  // active/in-progress: yellow
+	colDone   = lipgloss.Color("2")  // done: green
+	colErr    = lipgloss.Color("1")  // error: red
+	colSelBg  = lipgloss.Color("4")  // selected line background: blue
 )
 
 var (
 	titleFocused = lipgloss.NewStyle().Bold(true).Foreground(colTitle)
-	titleBlur    = lipgloss.NewStyle().Bold(true).Foreground(colMuted)
+	titleBlur    = lipgloss.NewStyle().Bold(true).Faint(true)
 
-	selectedItem = lipgloss.NewStyle().Background(colSelBg).Foreground(colSelFg).Bold(true)
+	// Selected line: blue background with the terminal default foreground, matching
+	// lazygit's selectedLineBgColor.
+	selectedItem = lipgloss.NewStyle().Background(colSelBg).Foreground(colNone).Bold(true)
 	normalItem   = lipgloss.NewStyle()
-	mutedText    = lipgloss.NewStyle().Foreground(colMuted)
-	errText      = lipgloss.NewStyle().Foreground(colErr).Bold(true)
+	// Muted text inherits the terminal foreground rendered faint, so it stays
+	// legible on any theme instead of forcing a fixed grey.
+	mutedText = lipgloss.NewStyle().Faint(true)
+	errText   = lipgloss.NewStyle().Foreground(colErr).Bold(true)
 
-	glyphDraft  = lipgloss.NewStyle().Foreground(colDraft).Render("○")
+	glyphDraft  = lipgloss.NewStyle().Faint(true).Render("○")
 	glyphActive = lipgloss.NewStyle().Foreground(colActive).Render("◉")
 	glyphDone   = lipgloss.NewStyle().Foreground(colDone).Render("✓")
 
 	tabActive   = lipgloss.NewStyle().Bold(true).Foreground(colTitle).Underline(true)
-	tabInactive = lipgloss.NewStyle().Foreground(colMuted)
+	tabInactive = lipgloss.NewStyle().Faint(true)
 
-	hintKey  = lipgloss.NewStyle().Foreground(colHintKey)
-	hintDesc = lipgloss.NewStyle().Foreground(colMuted)
+	hintKey  = lipgloss.NewStyle().Foreground(colTitle)
+	hintDesc = lipgloss.NewStyle().Faint(true)
 
-	logTitle = lipgloss.NewStyle().Bold(true).Foreground(colMuted)
+	logTitle = lipgloss.NewStyle().Bold(true).Faint(true)
 )
 
 // small inline style helpers.
@@ -46,12 +51,13 @@ func lipglossColor(c, s string) string {
 }
 func faint(s string) string { return lipgloss.NewStyle().Faint(true).Render(s) }
 
-// borderColor picks the panel border color based on focus.
-func borderColor(focused bool) lipgloss.Color {
+// borderColor picks the panel border color based on focus. An unfocused panel
+// uses the terminal default so inactive borders match the user's theme.
+func borderColor(focused bool) lipgloss.TerminalColor {
 	if focused {
 		return colFocus
 	}
-	return colBorder
+	return colNone
 }
 
 // panelBox renders a titled, bordered panel sized to (w, h) total cells. Body is
@@ -71,6 +77,7 @@ func panelBox(title, body string, w, h int, focused bool) string {
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(borderColor(focused)).
+		Padding(0, 1).
 		Width(w - 2).
 		Height(h - 2).
 		MaxWidth(w).

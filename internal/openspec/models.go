@@ -3,6 +3,18 @@
 // output into typed models, rather than parsing the openspec/ markdown tree.
 package openspec
 
+import "encoding/json"
+
+// firstNonEmpty returns the first non-empty string in vals, or "".
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
 // Root is the resolved OpenSpec root reported by most CLI commands.
 type Root struct {
 	Path   string `json:"path"`
@@ -57,10 +69,27 @@ type ChangeList struct {
 	Root    Root            `json:"root"`
 }
 
-// SpecSummary is one entry from `openspec list --specs --json`.
+// SpecSummary is one entry from `openspec list --specs --json`. Name is decoded
+// tolerantly: the CLI keys specs by `id` (openspec 1.5.0), while older/other
+// versions may use `name`; either populates Name so the identity is never blank.
 type SpecSummary struct {
-	Name             string `json:"name"`
+	Name             string `json:"id"`
 	RequirementCount int    `json:"requirementCount"`
+}
+
+// UnmarshalJSON accepts the spec identifier under either `id` or `name`.
+func (s *SpecSummary) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		ID               string `json:"id"`
+		Name             string `json:"name"`
+		RequirementCount int    `json:"requirementCount"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	s.Name = firstNonEmpty(raw.ID, raw.Name)
+	s.RequirementCount = raw.RequirementCount
+	return nil
 }
 
 // SpecList is the payload of `openspec list --specs --json`.
@@ -118,9 +147,28 @@ type ChangeDetail struct {
 }
 
 // SpecDetail is the payload of `openspec spec show <id> --json`. The field names
-// are decoded tolerantly; different CLI versions expose id/name and requirements.
+// are decoded tolerantly; different CLI versions expose id/name/title and
+// requirements.
 type SpecDetail struct {
 	ID           string        `json:"id"`
 	Name         string        `json:"name"`
 	Requirements []Requirement `json:"requirements"`
+}
+
+// UnmarshalJSON accepts the spec identifier under `id` or `name`, and a display
+// name under `name` or `title` (openspec 1.5.0 emits `id` + `title`).
+func (s *SpecDetail) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		ID           string        `json:"id"`
+		Name         string        `json:"name"`
+		Title        string        `json:"title"`
+		Requirements []Requirement `json:"requirements"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	s.ID = firstNonEmpty(raw.ID, raw.Name)
+	s.Name = firstNonEmpty(raw.Name, raw.Title, raw.ID)
+	s.Requirements = raw.Requirements
+	return nil
 }

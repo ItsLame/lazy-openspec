@@ -23,6 +23,54 @@ func TestDecodeChangeList(t *testing.T) {
 	}
 }
 
+func TestDecodeSpecListByID(t *testing.T) {
+	// openspec 1.5.0 keys specs by `id`.
+	raw := []byte(`{"specs":[{"id":"artifact-rendering","requirementCount":4}],"root":{"path":"/tmp","source":"nearest"}}`)
+	sl, err := decode[SpecList](raw)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(sl.Specs) != 1 {
+		t.Fatalf("got %d specs, want 1", len(sl.Specs))
+	}
+	if sl.Specs[0].Name != "artifact-rendering" {
+		t.Errorf("Name = %q, want %q", sl.Specs[0].Name, "artifact-rendering")
+	}
+	if sl.Specs[0].RequirementCount != 4 {
+		t.Errorf("RequirementCount = %d, want 4", sl.Specs[0].RequirementCount)
+	}
+}
+
+func TestDecodeSpecListByName(t *testing.T) {
+	// Older/other CLI versions may key specs by `name`.
+	raw := []byte(`{"specs":[{"name":"auth","requirementCount":2}]}`)
+	sl, err := decode[SpecList](raw)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(sl.Specs) != 1 || sl.Specs[0].Name != "auth" {
+		t.Fatalf("unexpected: %+v", sl.Specs)
+	}
+}
+
+func TestDecodeSpecDetailByIDAndTitle(t *testing.T) {
+	// openspec 1.5.0 emits `id` + `title` (no `name`).
+	raw := []byte(`{"id":"auth","title":"Authentication","requirements":[{"text":"SHALL authenticate","scenarios":[{"rawText":"- **WHEN** x"}]}]}`)
+	sd, err := decode[SpecDetail](raw)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if sd.ID != "auth" {
+		t.Errorf("ID = %q, want %q", sd.ID, "auth")
+	}
+	if sd.Name != "Authentication" {
+		t.Errorf("Name = %q, want %q", sd.Name, "Authentication")
+	}
+	if len(sd.Requirements) != 1 || len(sd.Requirements[0].Scenarios) != 1 {
+		t.Fatalf("requirements not decoded: %+v", sd.Requirements)
+	}
+}
+
 func TestDecodeTrimsWarningPreamble(t *testing.T) {
 	raw := []byte("Warning: Ignoring flags not applicable to change: scenarios\n{\"id\":\"c\",\"deltaCount\":1,\"deltas\":[]}")
 	cd, err := decode[ChangeDetail](raw)

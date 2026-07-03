@@ -82,7 +82,7 @@ func (m Model) changeSummaryBlock(c openspec.ChangeSummary, width int) string {
 		case "done":
 			glyph = glyphDone
 		case "ready":
-			glyph = lipglossColor("214", "◐")
+			glyph = lipglossColor("3", "◐")
 		case "blocked":
 			glyph = mutedText.Render("·")
 		}
@@ -146,7 +146,7 @@ func (m Model) tasksTab(content string, width int) (string, int) {
 		for _, t := range g.Tasks {
 			pointer := "  "
 			if idx == m.taskCursor {
-				pointer = lipglossColor("39", "▸ ")
+				pointer = lipglossColor("6", "▸ ")
 				cursorLine = len(lines)
 			}
 			glyph := mutedText.Render("☐")

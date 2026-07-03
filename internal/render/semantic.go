@@ -35,25 +35,28 @@ type Semantic struct {
 	empty   lipgloss.Style
 }
 
-// NewSemantic builds the semantic renderer with its style palette.
+// NewSemantic builds the semantic renderer with its style palette. Colors are
+// drawn from the terminal's ANSI 16-color palette (indices 0-15) so the main
+// pane matches the panel chrome and the user's terminal theme, and degrade
+// automatically on NO_COLOR terminals via lipgloss/termenv.
 func NewSemantic() *Semantic {
 	bold := lipgloss.NewStyle().Bold(true)
 	return &Semantic{
-		when:  bold.Foreground(lipgloss.Color("42")),  // green
-		then:  bold.Foreground(lipgloss.Color("39")),  // cyan/blue
-		other: bold.Foreground(lipgloss.Color("214")), // amber
+		when:  bold.Foreground(lipgloss.Color("2")), // green
+		then:  bold.Foreground(lipgloss.Color("6")), // cyan
+		other: bold.Foreground(lipgloss.Color("3")), // yellow
 		req:   bold.Underline(true),
 		badge: map[string]lipgloss.Style{
-			"ADDED":    lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("42")),
-			"MODIFIED": lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214")),
-			"REMOVED":  lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("203")),
-			"RENAMED":  lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39")),
+			"ADDED":    lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("2")), // green
+			"MODIFIED": lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("3")), // yellow
+			"REMOVED":  lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("1")), // red
+			"RENAMED":  lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("6")), // cyan
 		},
 		group:   bold,
-		checked: lipgloss.NewStyle().Foreground(lipgloss.Color("42")),
-		pending: lipgloss.NewStyle().Foreground(lipgloss.Color("246")),
+		checked: lipgloss.NewStyle().Foreground(lipgloss.Color("2")), // green
+		pending: lipgloss.NewStyle().Faint(true),
 		dim:     lipgloss.NewStyle().Faint(true),
-		filled:  lipgloss.NewStyle().Foreground(lipgloss.Color("42")),
+		filled:  lipgloss.NewStyle().Foreground(lipgloss.Color("2")), // green
 		empty:   lipgloss.NewStyle().Faint(true),
 	}
 }
