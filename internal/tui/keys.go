@@ -6,11 +6,11 @@ type binding struct {
 	desc string
 }
 
-// dashboardHelp lists keybindings available on the dashboard.
-var dashboardHelp = []binding{
+// navHelp lists keybindings available while the list (nav) pane is focused.
+var navHelp = []binding{
 	{"↑/↓ j/k", "move selection"},
 	{"tab / 1-3", "switch panel"},
-	{"enter", "open"},
+	{"enter", "focus preview pane"},
 	{"r", "refresh"},
 	{"v", "validate"},
 	{"a", "apply instructions"},
@@ -20,36 +20,24 @@ var dashboardHelp = []binding{
 	{"q", "quit"},
 }
 
-// changeDetailHelp lists keybindings in the change detail view.
-var changeDetailHelp = []binding{
-	{"[ / ]  ←/→", "switch artifact"},
+// previewHelp lists keybindings available while the preview pane is focused.
+var previewHelp = []binding{
 	{"↑/↓ j/k", "scroll"},
+	{"ctrl+d / ctrl+u", "half page"},
+	{"g / G", "top / bottom"},
+	{"[ / ]", "switch tab / requirement"},
 	{"space", "toggle task (tasks tab)"},
-	{"v", "validate"},
-	{"a", "apply instructions"},
-	{"A", "archive"},
-	{"esc", "back"},
+	{"/", "search"},
+	{"n / N", "next / prev match"},
+	{"esc", "clear search / back to list"},
 	{"?", "help"},
 	{"q", "quit"},
 }
 
-// specDetailHelp lists keybindings in the spec detail view.
-var specDetailHelp = []binding{
-	{"↑/↓ j/k", "scroll"},
-	{"n / p", "next / prev requirement"},
-	{"esc", "back"},
-	{"?", "help"},
-	{"q", "quit"},
-}
-
-// helpFor returns the help entries for the current screen.
-func helpFor(s screen) []binding {
-	switch s {
-	case screenChangeDetail:
-		return changeDetailHelp
-	case screenSpecDetail:
-		return specDetailHelp
-	default:
-		return dashboardHelp
+// helpEntries returns the help entries for the active pane.
+func (m Model) helpEntries() []binding {
+	if m.activePane == panePreview {
+		return previewHelp
 	}
+	return navHelp
 }

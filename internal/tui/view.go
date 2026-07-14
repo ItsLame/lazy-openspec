@@ -23,7 +23,7 @@ func (m Model) View() string {
 		return m.overlay("Confirm", m.confirm.prompt+"\n\n"+mutedText.Render("y = yes    n = no"))
 	}
 	if m.showHelp {
-		return m.overlay("Keybindings", helpBody(helpFor(m.screen)))
+		return m.overlay("Keybindings", helpBody(m.helpEntries()))
 	}
 	if m.showActions {
 		return m.overlay("Actions", helpBody(actionEntries))
@@ -46,7 +46,8 @@ func (m Model) renderLeft(d dims) string {
 	var boxes []string
 	for p := panel(0); p < numPanels; p++ {
 		h := d.panelH[p]
-		bodyH := h - 3
+		// Only the two border lines are reserved: the title lives in the border.
+		bodyH := h - 2
 		if bodyH < 1 {
 			bodyH = 1
 		}
@@ -183,9 +184,9 @@ func groupName(lc openspec.Lifecycle) string {
 
 func (m Model) renderMain(d dims) string {
 	title, subtitle := m.mainTitles()
-	inner := strings.Join([]string{title, subtitle, m.vp.View(), m.scrollIndicator()}, "\n")
-	focused := m.screen != screenDashboard
-	return lipgloss.NewStyle().
+	inner := strings.Join([]string{subtitle, m.vp.View(), m.scrollIndicator()}, "\n")
+	focused := m.activePane == panePreview
+	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(borderColor(focused)).
 		Padding(0, 1).
@@ -194,25 +195,26 @@ func (m Model) renderMain(d dims) string {
 		MaxWidth(d.mainW).
 		MaxHeight(d.bodyH).
 		Render(inner)
+	return withBorderTitle(box, title, focused)
 }
 
 func (m Model) mainTitles() (string, string) {
-	switch m.screen {
-	case screenChangeDetail:
-		title := titleFocused.Render(m.curChange)
-		if m.curArchived {
+	ts := borderTitleStyle(m.activePane == panePreview)
+	if c, ok := m.selectedChange(); ok {
+		title := ts.Render(c.Name)
+		if m.focus == panelArchive {
 			title += " " + faint("(archived)")
 		}
 		return title, m.tabBar()
-	case screenSpecDetail:
+	}
+	if s, ok := m.selectedSpec(); ok {
 		sub := ""
 		if m.specDetail != nil && len(m.specDetail.Requirements) > 0 {
 			sub = mutedText.Render(fmt.Sprintf("requirement %d/%d", m.reqIdx+1, len(m.specDetail.Requirements)))
 		}
-		return titleFocused.Render("spec: " + m.curSpec), sub
-	default:
-		return titleBlur.Render("Details"), mutedText.Render("preview")
+		return ts.Render("spec: " + s.Name), sub
 	}
+	return ts.Render("Details"), mutedText.Render("preview")
 }
 
 func (m Model) tabBar() string {
@@ -232,13 +234,34 @@ func (m Model) scrollIndicator() string {
 	if pct < 0 {
 		pct = 0
 	}
-	return faint(fmt.Sprintf("── scroll %d%%", pct))
+	s := faint(fmt.Sprintf("── scroll %d%%", pct))
+	if m.search.active() {
+		s += "  " + m.searchStatus()
+	}
+	return s
+}
+
+// searchStatus renders the search prompt and match counter for the scroll line.
+func (m Model) searchStatus() string {
+	prompt := hintKey.Render("/") + m.search.query
+	if m.search.typing {
+		prompt += "▏"
+	}
+	count := ""
+	switch {
+	case m.search.query == "":
+	case len(m.search.matches) == 0:
+		count = faint("  no matches")
+	default:
+		count = faint(fmt.Sprintf("  match %d/%d", m.search.idx+1, len(m.search.matches)))
+	}
+	return prompt + count
 }
 
 // ---- bottom: log + hint -----------------------------------------------------
 
 func (m Model) renderLog(d dims) string {
-	inner := d.logH - 3
+	inner := d.logH - 2
 	if inner < 1 {
 		inner = 1
 	}
@@ -255,8 +278,7 @@ func (m Model) renderLog(d dims) string {
 	if m.running {
 		title += " " + lipglossColor("3", "● running")
 	}
-	innerStr := title + "\n" + strings.Join(shown, "\n")
-	return lipgloss.NewStyle().
+	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(colNone).
 		Padding(0, 1).
@@ -264,12 +286,13 @@ func (m Model) renderLog(d dims) string {
 		Height(d.logH - 2).
 		MaxWidth(m.width).
 		MaxHeight(d.logH).
-		Render(innerStr)
+		Render(strings.Join(shown, "\n"))
+	return withBorderTitle(box, title, false)
 }
 
 func (m Model) renderHint() string {
 	var b strings.Builder
-	for i, bind := range shortHints(m.screen) {
+	for i, bind := range m.shortHints() {
 		if i > 0 {
 			b.WriteString(faint("  "))
 		}
@@ -278,15 +301,16 @@ func (m Model) renderHint() string {
 	return lipgloss.NewStyle().Width(m.width).MaxWidth(m.width).Render(b.String())
 }
 
-func shortHints(s screen) []binding {
-	switch s {
-	case screenChangeDetail:
-		return []binding{{"[ ]", "artifact"}, {"space", "toggle"}, {"v", "validate"}, {"esc", "back"}, {"?", "help"}}
-	case screenSpecDetail:
-		return []binding{{"n/p", "req"}, {"↑↓", "scroll"}, {"esc", "back"}, {"?", "help"}}
-	default:
-		return []binding{{"tab", "panel"}, {"↑↓", "move"}, {"⏎", "open"}, {"v", "validate"}, {"x", "actions"}, {"?", "help"}, {"q", "quit"}}
+// shortHints returns the hint-bar bindings for the active pane. In the preview
+// the bindings depend on whether a change (tabs) or spec (requirements) is shown.
+func (m Model) shortHints() []binding {
+	if m.activePane == panePreview {
+		if _, ok := m.selectedSpec(); ok {
+			return []binding{{"↑↓ j/k", "scroll"}, {"[ ]", "req"}, {"/", "search"}, {"n/N", "match"}, {"esc", "list"}, {"?", "help"}}
+		}
+		return []binding{{"↑↓ j/k", "scroll"}, {"[ ]", "tab"}, {"space", "toggle"}, {"/", "search"}, {"esc", "list"}, {"?", "help"}}
 	}
+	return []binding{{"tab", "panel"}, {"↑↓", "move"}, {"⏎", "focus"}, {"v", "validate"}, {"x", "actions"}, {"?", "help"}, {"q", "quit"}}
 }
 
 // ---- overlays ---------------------------------------------------------------
@@ -303,7 +327,8 @@ func (m Model) overlay(title, body string) string {
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(colFocus).
 		Padding(1, 3).
-		Render(titleFocused.Render(title) + "\n\n" + body)
+		Render(body)
+	box = withBorderTitle(box, borderTitleStyle(true).Render(title), true)
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
 }
 

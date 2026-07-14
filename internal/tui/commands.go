@@ -4,11 +4,13 @@ import (
 	"bufio"
 	"context"
 	"io"
+	"os"
 	"os/exec"
 	"path/filepath"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/itslame/lazy-openspec/internal/openspec"
+	"github.com/itslame/lazy-openspec/internal/tasks"
 )
 
 // ---- messages ---------------------------------------------------------------
@@ -44,6 +46,17 @@ type specDetailMsg struct {
 }
 type archivedMsg struct {
 	items []openspec.ChangeSummary
+}
+
+// archivedOverview is the on-disk overview of an archived change, used in place
+// of `openspec status`/`show` (which cannot resolve archived names).
+type archivedOverview struct {
+	completed, total                 int
+	hasProposal, hasDesign, hasTasks bool
+}
+type archivedOverviewMsg struct {
+	change string
+	ov     archivedOverview
 }
 type logLineMsg struct{ line string }
 type cmdDoneMsg struct {
@@ -115,6 +128,28 @@ func loadArtifact(changeDir, change string, tab artifactTab) tea.Cmd {
 		}
 		content, err := readFile(filepath.Join(changeDir, rel))
 		return artifactMsg{change: change, tab: tab, content: content, err: err}
+	}
+}
+
+// loadArchivedOverview derives an archived change's overview from disk: task
+// counts parsed from tasks.md and which artifact files are present. Archived
+// changes are not resolvable by the CLI, so this never shells out.
+func loadArchivedOverview(changeDir, change string) tea.Cmd {
+	return func() tea.Msg {
+		tasksContent, _ := readFile(filepath.Join(changeDir, "tasks.md"))
+		ov := archivedOverview{}
+		for _, g := range tasks.Parse(tasksContent) {
+			ov.completed += g.Completed()
+			ov.total += g.Total()
+		}
+		exists := func(name string) bool {
+			_, err := os.Stat(filepath.Join(changeDir, name))
+			return err == nil
+		}
+		ov.hasProposal = exists("proposal.md")
+		ov.hasDesign = exists("design.md")
+		ov.hasTasks = exists("tasks.md")
+		return archivedOverviewMsg{change: change, ov: ov}
 	}
 }
 

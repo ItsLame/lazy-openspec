@@ -34,10 +34,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.changes = sortChanges(msg.list.Changes)
 		m.rootPath = msg.list.Root.Path
 		m.clampSel()
-		var cmds []tea.Cmd
-		cmds = append(cmds, loadArchived(m.rootPath))
-		if c, ok := m.selectedChange(); ok {
-			cmds = append(cmds, loadStatus(m.client, c.Name))
+		m.syncSelection()
+		cmds := []tea.Cmd{loadArchived(m.rootPath)}
+		if c := m.ensurePreviewLoaded(); c != nil {
+			cmds = append(cmds, c)
 		}
 		m = m.refreshMain()
 		return m, tea.Batch(cmds...)
@@ -47,41 +47,63 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.specs = msg.list.Specs
 			m.clampSel()
 		}
+		m.syncSelection()
+		cmd := m.ensurePreviewLoaded()
 		m = m.refreshMain()
-		return m, nil
+		return m, cmd
 
 	case archivedMsg:
 		m.archived = msg.items
 		m.clampSel()
+		m.syncSelection()
+		cmd := m.ensurePreviewLoaded()
 		m = m.refreshMain()
-		return m, nil
+		return m, cmd
 
 	case statusMsg:
-		if msg.err == nil {
+		if msg.err != nil {
+			m.statusErr[msg.change] = msg.err
+		} else {
 			m.statusCache[msg.change] = msg.st
+			delete(m.statusErr, msg.change)
 		}
 		m = m.refreshMain()
 		return m, nil
 
 	case changeDetailMsg:
-		if msg.err == nil {
+		if msg.err != nil {
+			m.specsErr[msg.change] = msg.err
+		} else {
 			m.changeDetail[msg.change] = msg.detail
+			delete(m.specsErr, msg.change)
 		}
 		m = m.refreshMain()
 		return m, nil
 
 	case artifactMsg:
-		if msg.err == nil {
-			m.detailCache[cacheKey(msg.change, msg.tab)] = msg.content
+		key := cacheKey(msg.change, msg.tab)
+		if msg.err != nil {
+			m.detailErr[key] = msg.err.Error()
+		} else {
+			m.detailCache[key] = msg.content
+			delete(m.detailErr, key)
 		}
 		m = m.refreshMain()
 		return m, nil
 
+	case archivedOverviewMsg:
+		m.archivedOv[msg.change] = msg.ov
+		m = m.refreshMain()
+		return m, nil
+
 	case specDetailMsg:
-		if msg.err == nil {
+		if msg.err != nil {
+			m.specErr[msg.id] = msg.err
+		} else if msg.id == m.curSpec {
 			d := msg.detail
 			m.specDetail = &d
 			m.reqIdx = 0
+			delete(m.specErr, msg.id)
 		}
 		m = m.refreshMain()
 		return m, nil
@@ -155,7 +177,13 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// Common bindings across screens.
+	// While typing a search query in the preview, every key feeds the query so
+	// that letters like q/r/v are not swallowed by the global bindings below.
+	if m.activePane == panePreview && m.search.typing {
+		return m.handleSearchInput(msg)
+	}
+
+	// Common bindings across panes.
 	switch k {
 	case "q":
 		m.quitting = true
@@ -173,18 +201,16 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	switch m.screen {
-	case screenDashboard:
-		return m.handleDashboardKey(k)
-	case screenChangeDetail:
-		return m.handleChangeDetailKey(k)
-	case screenSpecDetail:
-		return m.handleSpecDetailKey(k)
+	switch m.activePane {
+	case paneNav:
+		return m.handleNavKey(k)
+	case panePreview:
+		return m.handlePreviewKey(msg)
 	}
 	return m, nil
 }
 
-func (m Model) handleDashboardKey(k string) (tea.Model, tea.Cmd) {
+func (m Model) handleNavKey(k string) (tea.Model, tea.Cmd) {
 	switch k {
 	case "tab", "l":
 		m.focus = (m.focus + 1) % numPanels
@@ -201,35 +227,134 @@ func (m Model) handleDashboardKey(k string) (tea.Model, tea.Cmd) {
 	case "down", "j":
 		m.moveSel(1)
 	case "enter":
-		return m.enterSelected()
+		// Transfer focus to the preview pane; the previewed item is unchanged.
+		m.activePane = panePreview
+		m = m.refreshMain()
+		return m, nil
 	default:
 		return m, nil
 	}
-	// Selection or focus changed: refresh preview and load status if needed.
-	var cmd tea.Cmd
-	if c, ok := m.selectedChange(); ok {
-		if _, cached := m.statusCache[c.Name]; !cached {
-			cmd = loadStatus(m.client, c.Name)
-		}
-	}
+	// Selection or focus changed: follow the selection and lazily load its preview.
+	m.syncSelection()
+	cmd := m.ensurePreviewLoaded()
 	m = m.refreshMain()
 	return m, cmd
 }
 
-func (m Model) handleChangeDetailKey(k string) (tea.Model, tea.Cmd) {
-	switch k {
+// ensurePreviewLoaded dispatches only the loader needed for the current
+// selection and active tab, if its data is not already cached (or known to have
+// failed). Archived changes are sourced from disk and never hit the CLI.
+func (m Model) ensurePreviewLoaded() tea.Cmd {
+	if c, ok := m.selectedChange(); ok {
+		archived := m.focus == panelArchive
+		sub := "changes"
+		if archived {
+			sub = "changes/archive"
+		}
+		dir := openspec.ArtifactPath(m.rootPath, "openspec/"+sub+"/"+c.Name)
+		var cmds []tea.Cmd
+		if archived {
+			if _, ok := m.archivedOv[c.Name]; !ok {
+				cmds = append(cmds, loadArchivedOverview(dir, c.Name))
+			}
+			if fileBackedTab(m.tab) {
+				key := cacheKey(c.Name, m.tab)
+				if _, ok := m.detailCache[key]; !ok {
+					if _, failed := m.detailErr[key]; !failed {
+						cmds = append(cmds, loadArtifact(dir, c.Name, m.tab))
+					}
+				}
+			}
+			return tea.Batch(cmds...)
+		}
+		switch {
+		case m.tab == tabOverview:
+			if _, ok := m.statusCache[c.Name]; !ok {
+				if _, failed := m.statusErr[c.Name]; !failed {
+					cmds = append(cmds, loadStatus(m.client, c.Name))
+				}
+			}
+		case fileBackedTab(m.tab):
+			key := cacheKey(c.Name, m.tab)
+			if _, ok := m.detailCache[key]; !ok {
+				if _, failed := m.detailErr[key]; !failed {
+					cmds = append(cmds, loadArtifact(dir, c.Name, m.tab))
+				}
+			}
+		case m.tab == tabSpecs:
+			if _, ok := m.changeDetail[c.Name]; !ok {
+				if _, failed := m.specsErr[c.Name]; !failed {
+					cmds = append(cmds, loadChangeDetail(m.client, c.Name))
+				}
+			}
+		}
+		return tea.Batch(cmds...)
+	}
+	if s, ok := m.selectedSpec(); ok {
+		if m.specDetail == nil || m.specDetail.ID != s.Name {
+			if _, failed := m.specErr[s.Name]; !failed {
+				return loadSpecDetail(m.client, s.Name)
+			}
+		}
+	}
+	return nil
+}
+
+// handlePreviewKey routes keys while the preview pane is focused: focus toggle,
+// search, match navigation, then item-specific tab/scroll handling.
+func (m Model) handlePreviewKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
 	case "esc":
-		m.screen = screenDashboard
+		if m.search.active() {
+			m.clearSearch()
+			m = m.refreshMain()
+			return m, nil
+		}
+		m.activePane = paneNav
 		m = m.refreshMain()
 		return m, nil
-	case "]", "right", "l":
+	case "enter":
+		m.activePane = paneNav
+		m = m.refreshMain()
+		return m, nil
+	case "/":
+		m.search = searchState{typing: true}
+		m = m.refreshMain()
+		return m, nil
+	case "n":
+		return m.jumpMatch(1), nil
+	case "N":
+		return m.jumpMatch(-1), nil
+	}
+	if _, ok := m.selectedChange(); ok {
+		return m.previewChangeKey(msg)
+	}
+	if _, ok := m.selectedSpec(); ok {
+		return m.previewSpecKey(msg)
+	}
+	var cmd tea.Cmd
+	m.vp, cmd = m.vp.Update(msg)
+	return m, cmd
+}
+
+// previewChangeKey handles tab switching, task-cursor moves, and scrolling for a
+// change preview.
+func (m Model) previewChangeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "]", "right":
 		m.tab = (m.tab + 1) % numTabs
 		return m.afterTabChange()
-	case "[", "left", "h":
+	case "[", "left":
 		m.tab = (m.tab + numTabs - 1) % numTabs
 		return m.afterTabChange()
 	case " ":
 		return m.toggleTask()
+	case "g":
+		m.vp.GotoTop()
+		return m, nil
+	case "G":
+		m.vp.GotoBottom()
+		return m, nil
 	case "up", "k":
 		if m.tab == tabTasks {
 			m.moveTaskCursor(-1)
@@ -244,7 +369,7 @@ func (m Model) handleChangeDetailKey(k string) (tea.Model, tea.Cmd) {
 		}
 	}
 	var cmd tea.Cmd
-	m.vp, cmd = m.vp.Update(keyMsg(k))
+	m.vp, cmd = m.vp.Update(msg)
 	return m, cmd
 }
 
@@ -264,83 +389,77 @@ func (m *Model) moveTaskCursor(delta int) {
 	}
 }
 
-func (m Model) handleSpecDetailKey(k string) (tea.Model, tea.Cmd) {
-	switch k {
-	case "esc":
-		m.screen = screenDashboard
-		m = m.refreshMain()
-		return m, nil
-	case "n":
+// previewSpecKey handles requirement jumping and scrolling for a spec preview.
+func (m Model) previewSpecKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "]", "right":
 		if len(m.reqOffsets) > 0 {
 			m.reqIdx = (m.reqIdx + 1) % len(m.reqOffsets)
 			m.vp.SetYOffset(m.reqOffsets[m.reqIdx])
 		}
 		return m, nil
-	case "p":
+	case "[", "left":
 		if len(m.reqOffsets) > 0 {
 			m.reqIdx = (m.reqIdx + len(m.reqOffsets) - 1) % len(m.reqOffsets)
 			m.vp.SetYOffset(m.reqOffsets[m.reqIdx])
 		}
 		return m, nil
-	default:
-		var cmd tea.Cmd
-		m.vp, cmd = m.vp.Update(keyMsg(k))
-		return m, cmd
+	case "g":
+		m.vp.GotoTop()
+		return m, nil
+	case "G":
+		m.vp.GotoBottom()
+		return m, nil
 	}
+	var cmd tea.Cmd
+	m.vp, cmd = m.vp.Update(msg)
+	return m, cmd
 }
 
-// enterSelected opens the highlighted change or spec.
-func (m Model) enterSelected() (tea.Model, tea.Cmd) {
-	if c, ok := m.selectedChange(); ok {
-		archived := m.focus == panelArchive
-		return m.openChange(c.Name, archived)
+// handleSearchInput edits the search query while typing is active. Every edit
+// re-renders, which recomputes matches and jumps to the first one.
+func (m Model) handleSearchInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEnter:
+		m.search.typing = false // confirm: keep the query and matches
+	case tea.KeyEsc:
+		m.clearSearch()
+	case tea.KeyBackspace:
+		if r := []rune(m.search.query); len(r) > 0 {
+			m.search.query = string(r[:len(r)-1])
+			m.search.idx = 0
+		}
+	case tea.KeySpace:
+		m.search.query += " "
+		m.search.idx = 0
+	case tea.KeyRunes:
+		m.search.query += string(msg.Runes)
+		m.search.idx = 0
+	default:
+		return m, nil
 	}
-	if s, ok := m.selectedSpec(); ok {
-		m.screen = screenSpecDetail
-		m.curSpec = s.Name
-		m.specDetail = nil
-		m.reqIdx = 0
-		m.vp.GotoTop()
-		m = m.refreshMain()
-		return m, loadSpecDetail(m.client, s.Name)
-	}
+	m = m.refreshMain()
 	return m, nil
 }
 
-// openChange enters the change detail view and loads its artifacts.
-func (m Model) openChange(name string, archived bool) (tea.Model, tea.Cmd) {
-	m.screen = screenChangeDetail
-	m.curChange = name
-	m.curArchived = archived
-	m.tab = tabProposal
-	m.taskCursor = 0
-	sub := "changes"
-	if archived {
-		sub = "changes/archive"
+// jumpMatch advances the current search match by delta (with wraparound) and
+// re-renders so the new current match is highlighted and scrolled into view.
+func (m Model) jumpMatch(delta int) Model {
+	n := len(m.search.matches)
+	if n == 0 {
+		return m
 	}
-	m.curChangeDir = openspec.ArtifactPath(m.rootPath, "openspec/"+sub+"/"+name)
-	m.vp.GotoTop()
-	m = m.refreshMain()
-	return m, tea.Batch(
-		loadChangeDetail(m.client, name),
-		loadArtifact(m.curChangeDir, name, tabProposal),
-	)
+	m.search.idx = (m.search.idx + delta + n) % n
+	return m.refreshMain()
 }
 
-// afterTabChange loads the newly selected tab's content if not cached.
+// afterTabChange resets scroll/search and loads the newly selected tab's content
+// if not cached.
 func (m Model) afterTabChange() (tea.Model, tea.Cmd) {
 	m.vp.GotoTop()
 	m.taskCursor = 0
-	var cmd tea.Cmd
-	if m.tab == tabProposal || m.tab == tabDesign || m.tab == tabTasks {
-		if _, ok := m.detailCache[cacheKey(m.curChange, m.tab)]; !ok {
-			cmd = loadArtifact(m.curChangeDir, m.curChange, m.tab)
-		}
-	} else if m.tab == tabSpecs {
-		if _, ok := m.changeDetail[m.curChange]; !ok {
-			cmd = loadChangeDetail(m.client, m.curChange)
-		}
-	}
+	m.clearSearch()
+	cmd := m.ensurePreviewLoaded()
 	m = m.refreshMain()
 	return m, cmd
 }
@@ -425,9 +544,6 @@ func (m Model) startCommand(label string, args []string) (tea.Model, tea.Cmd) {
 // actionTarget returns the change an action should apply to (detail view's
 // change, or the dashboard selection).
 func (m Model) actionTarget() (string, bool) {
-	if m.screen == screenChangeDetail && m.curChange != "" {
-		return m.curChange, true
-	}
 	if c, ok := m.selectedChange(); ok {
 		return c.Name, true
 	}
@@ -530,20 +646,4 @@ func maxZero(n int) int {
 		return 0
 	}
 	return n
-}
-
-// keyMsg builds a synthetic KeyMsg so scroll keys can be forwarded to the
-// viewport's own Update.
-func keyMsg(k string) tea.KeyMsg {
-	switch k {
-	case "up", "k":
-		return tea.KeyMsg{Type: tea.KeyUp}
-	case "down", "j":
-		return tea.KeyMsg{Type: tea.KeyDown}
-	case "pgup":
-		return tea.KeyMsg{Type: tea.KeyPgUp}
-	case "pgdown", "pgdn":
-		return tea.KeyMsg{Type: tea.KeyPgDown}
-	}
-	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(k)}
 }

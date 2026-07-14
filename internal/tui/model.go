@@ -7,12 +7,15 @@ import (
 	"github.com/itslame/lazy-openspec/internal/render"
 )
 
-type screen int
+// pane identifies which of the two columns holds keyboard focus. The left list
+// ("nav") drives what is previewed; the right preview receives scroll/search
+// keys when focused. The previewed content always follows the nav selection,
+// regardless of which pane is focused (lazygit-style).
+type pane int
 
 const (
-	screenDashboard screen = iota
-	screenChangeDetail
-	screenSpecDetail
+	paneNav pane = iota
+	panePreview
 )
 
 type panel int
@@ -29,14 +32,21 @@ var panelTitles = [numPanels]string{"1 Changes", "2 Specs", "3 Archive"}
 type artifactTab int
 
 const (
-	tabProposal artifactTab = iota
+	tabOverview artifactTab = iota
+	tabProposal
 	tabSpecs
 	tabDesign
 	tabTasks
 	numTabs
 )
 
-var tabNames = [numTabs]string{"proposal", "specs", "design", "tasks"}
+var tabNames = [numTabs]string{"overview", "proposal", "specs", "design", "tasks"}
+
+// fileBackedTab reports whether a tab is rendered from an on-disk artifact file
+// (proposal/design/tasks) rather than from a CLI call or in-memory status.
+func fileBackedTab(t artifactTab) bool {
+	return t == tabProposal || t == tabDesign || t == tabTasks
+}
 
 // confirmState drives a yes/no prompt for destructive actions.
 type confirmState struct {
@@ -59,8 +69,8 @@ type Model struct {
 	width, height int
 	ready         bool
 
-	screen screen
-	focus  panel
+	activePane pane
+	focus      panel
 
 	rootPath string
 	loadErr  error
@@ -72,21 +82,29 @@ type Model struct {
 	sel [numPanels]int
 
 	statusCache map[string]openspec.Status
+	statusErr   map[string]error // change -> failed status load (resolves "Loading")
 
-	// change detail state
+	// change detail state (tracks the currently selected/previewed change)
 	curChange    string
 	curChangeDir string
 	curArchived  bool
 	tab          artifactTab
 	taskCursor   int                              // selected task index in the tasks tab
 	detailCache  map[string]string                // "change/tab" -> markdown
+	detailErr    map[string]string                // "change/tab" -> artifact load error
 	changeDetail map[string]openspec.ChangeDetail // change -> deltas
+	specsErr     map[string]error                 // change -> failed specs (show) load
+	archivedOv   map[string]archivedOverview      // archived change -> on-disk overview
 
 	// spec detail state
 	curSpec    string
 	specDetail *openspec.SpecDetail
+	specErr    map[string]error // spec id -> failed detail load
 	reqIdx     int
-	reqOffsets []int // vp line offset of each requirement, for n/p navigation
+	reqOffsets []int // vp line offset of each requirement, for [ / ] navigation
+
+	// incremental search over the focused preview
+	search searchState
 
 	// actions overlay
 	showActions bool
@@ -110,8 +128,13 @@ func New(client *openspec.Client) Model {
 		sem:          render.NewSemantic(),
 		md:           render.NewMarkdown(80),
 		statusCache:  map[string]openspec.Status{},
+		statusErr:    map[string]error{},
 		detailCache:  map[string]string{},
+		detailErr:    map[string]string{},
 		changeDetail: map[string]openspec.ChangeDetail{},
+		specsErr:     map[string]error{},
+		archivedOv:   map[string]archivedOverview{},
+		specErr:      map[string]error{},
 		cmdCh:        make(chan tea.Msg, 128),
 		vp:           viewport.New(80, 20),
 	}
@@ -156,8 +179,9 @@ func (m Model) layout() dims {
 	if d.vpW < 10 {
 		d.vpW = 10
 	}
-	// Reserve lines inside the main box: 2 border + title + subtitle + scroll.
-	d.vpH = d.bodyH - 5
+	// Reserve lines inside the main box: 2 border + subtitle + scroll (the
+	// title lives in the top border).
+	d.vpH = d.bodyH - 4
 	if d.vpH < 3 {
 		d.vpH = 3
 	}
@@ -187,4 +211,37 @@ func (m Model) selectedSpec() (openspec.SpecSummary, bool) {
 		}
 	}
 	return openspec.SpecSummary{}, false
+}
+
+// syncSelection makes the previewed-change / previewed-spec state follow the
+// current nav selection. When the identity changes it resets the tab to the
+// overview, scrolls to the top, and clears any active search, so the preview
+// always reflects the highlighted item.
+func (m *Model) syncSelection() {
+	if c, ok := m.selectedChange(); ok {
+		archived := m.focus == panelArchive
+		if c.Name != m.curChange || archived != m.curArchived {
+			m.curChange = c.Name
+			m.curArchived = archived
+			m.tab = tabOverview
+			m.taskCursor = 0
+			sub := "changes"
+			if archived {
+				sub = "changes/archive"
+			}
+			m.curChangeDir = openspec.ArtifactPath(m.rootPath, "openspec/"+sub+"/"+c.Name)
+			m.clearSearch()
+			m.vp.GotoTop()
+		}
+		return
+	}
+	if s, ok := m.selectedSpec(); ok {
+		if s.Name != m.curSpec {
+			m.curSpec = s.Name
+			m.specDetail = nil // drop stale detail until the new spec loads
+			m.reqIdx = 0
+			m.clearSearch()
+			m.vp.GotoTop()
+		}
+	}
 }

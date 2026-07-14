@@ -1,6 +1,11 @@
 package tui
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"strings"
+
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
+)
 
 // Style palette. Colors are drawn from the terminal's ANSI 16-color palette
 // (indices 0-15) and the terminal default (unset) foreground, so the interface
@@ -60,8 +65,9 @@ func borderColor(focused bool) lipgloss.TerminalColor {
 	return colNone
 }
 
-// panelBox renders a titled, bordered panel sized to (w, h) total cells. Body is
-// expected to already fit; overflow is clipped via MaxHeight/MaxWidth.
+// panelBox renders a bordered panel sized to (w, h) total cells with its title
+// embedded in the top border, lazygit-style. Body is expected to already fit;
+// overflow is clipped via MaxHeight/MaxWidth.
 func panelBox(title, body string, w, h int, focused bool) string {
 	if w < 4 {
 		w = 4
@@ -69,12 +75,7 @@ func panelBox(title, body string, w, h int, focused bool) string {
 	if h < 3 {
 		h = 3
 	}
-	ts := titleBlur
-	if focused {
-		ts = titleFocused
-	}
-	inner := ts.Render(title) + "\n" + body
-	return lipgloss.NewStyle().
+	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(borderColor(focused)).
 		Padding(0, 1).
@@ -82,5 +83,37 @@ func panelBox(title, body string, w, h int, focused bool) string {
 		Height(h - 2).
 		MaxWidth(w).
 		MaxHeight(h).
-		Render(inner)
+		Render(body)
+	return withBorderTitle(box, borderTitleStyle(focused).Render(title), focused)
+}
+
+// borderTitleStyle styles a title embedded in a box frame: the active border
+// colour when the box is focused, so the whole top line reads as one piece the
+// way lazygit draws it, and de-emphasised otherwise.
+func borderTitleStyle(focused bool) lipgloss.Style {
+	if focused {
+		return lipgloss.NewStyle().Bold(true).Foreground(colFocus)
+	}
+	return titleBlur
+}
+
+// withBorderTitle rewrites a rendered box's top border so the (already styled)
+// title passes through the frame instead of occupying a body row, lazygit-style:
+// ╭─1 Changes───╮. A title too wide for the frame is stripped of its styling and
+// truncated so it can never break the border.
+func withBorderTitle(box, title string, focused bool) string {
+	parts := strings.SplitN(box, "\n", 2)
+	avail := lipgloss.Width(parts[0]) - 3 // corners plus the lead-in dash
+	if avail < 1 {
+		return box
+	}
+	if lipgloss.Width(title) > avail {
+		title = trunc(ansi.Strip(title), avail)
+	}
+	frame := lipgloss.NewStyle().Foreground(borderColor(focused))
+	top := frame.Render("╭─") + title + frame.Render(strings.Repeat("─", avail-lipgloss.Width(title))+"╮")
+	if len(parts) == 1 {
+		return top
+	}
+	return top + "\n" + parts[1]
 }
