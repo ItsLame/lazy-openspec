@@ -99,7 +99,7 @@ func borderTitleStyle(focused bool) lipgloss.Style {
 
 // withBorderTitle rewrites a rendered box's top border so the (already styled)
 // title passes through the frame instead of occupying a body row, lazygit-style:
-// ╭─1 Changes───╮. A title too wide for the frame is stripped of its styling and
+// ╭─[1]─Changes───╮. A title too wide for the frame is stripped of its styling and
 // truncated so it can never break the border.
 func withBorderTitle(box, title string, focused bool) string {
 	parts := strings.SplitN(box, "\n", 2)

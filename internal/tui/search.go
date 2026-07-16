@@ -23,6 +23,63 @@ func (s searchState) active() bool { return s.typing || s.query != "" }
 // clearSearch resets all search state.
 func (m *Model) clearSearch() { m.search = searchState{} }
 
+// listFilter drives the incremental filter over the focused list panel. Exactly
+// one filter is active at a time and it is bound to the panel that opened it —
+// moving focus elsewhere clears it, so no panel is ever left silently narrowed.
+type listFilter struct {
+	panel  panel  // the panel the filter applies to
+	query  string
+	typing bool // the query is being edited
+}
+
+// active reports whether a filter is in progress (being typed or applied).
+func (f listFilter) active() bool { return f.typing || f.query != "" }
+
+// appliesTo reports whether the filter narrows panel p's rows.
+func (f listFilter) appliesTo(p panel) bool { return f.active() && f.panel == p }
+
+// matches reports whether an item's name matches the query. Matching is plain
+// case-insensitive substring matching, the same semantics as preview search.
+func (f listFilter) matches(name string) bool {
+	return strings.Contains(asciiLower(name), asciiLower(f.query))
+}
+
+// clearFilter resets all filter state.
+func (m *Model) clearFilter() { m.filter = listFilter{} }
+
+// clearFilterKeepingSelection clears an active filter and re-anchors the
+// filtered panel's selection onto the row it was highlighting, so the index
+// still addresses that same item once the full list is restored.
+func (m *Model) clearFilterKeepingSelection() {
+	if !m.filter.active() {
+		return
+	}
+	p := m.filter.panel
+	name := m.visibleNameAt(p, m.sel[p])
+	m.clearFilter()
+	m.sel[p] = m.indexOfVisible(p, name)
+}
+
+// visibleNameAt returns the name of panel p's i-th visible row, or "" when i is
+// out of range.
+func (m Model) visibleNameAt(p panel, i int) string {
+	switch p {
+	case panelChanges:
+		if v := m.visibleChanges(); i >= 0 && i < len(v) {
+			return v[i].Name
+		}
+	case panelSpecs:
+		if v := m.visibleSpecs(); i >= 0 && i < len(v) {
+			return v[i].Name
+		}
+	case panelArchive:
+		if v := m.visibleArchived(); i >= 0 && i < len(v) {
+			return v[i].Name
+		}
+	}
+	return ""
+}
+
 var (
 	// searchHL highlights every match; searchHLCur distinguishes the current one.
 	searchHL    = lipgloss.NewStyle().Background(colActive).Foreground(lipgloss.Color("0"))

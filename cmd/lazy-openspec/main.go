@@ -37,7 +37,11 @@ func main() {
 	}
 	client := openspec.New(opts...)
 
-	p := tea.NewProgram(tui.New(client), tea.WithAltScreen())
+	// WithReportFocus lets the TUI refresh when the terminal regains focus, so an
+	// agent editing openspec/ from another pane is picked up on switching back.
+	// Terminals without DEC mode 1004 (or tmux without `focus-events on`) simply
+	// emit no events and fall back to the manual `r` refresh.
+	p := tea.NewProgram(tui.New(client), tea.WithAltScreen(), tea.WithReportFocus())
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, "lazy-openspec:", err)
 		os.Exit(1)

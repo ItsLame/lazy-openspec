@@ -1,8 +1,5 @@
-# spec-navigation Specification
+## MODIFIED Requirements
 
-## Purpose
-TBD - created by archiving change add-lazy-openspec-tui. Update Purpose after archive.
-## Requirements
 ### Requirement: Specs listing
 The Specs panel SHALL list the capabilities in the resolved OpenSpec root, each with its identifier and requirement count, sorted for stable ordering. The requirement count SHALL be rendered as a **leading gutter column** — placed before the name, right-aligned to the width of the widest visible count, and de-emphasised — so that counts line up in a readable column down the left edge of the panel rather than trailing names of varying length. Each row SHALL display the spec's identifier as reported by the CLI; a row SHALL NOT render with a blank name.
 
@@ -55,4 +52,3 @@ The application SHALL let the user move between requirements within the previewe
 #### Scenario: Requirement keys do not shadow search
 - **WHEN** the preview pane is focused for a spec
 - **THEN** `[` / `]` move between requirements and `n` / `N` are handled by search, not requirement navigation
-

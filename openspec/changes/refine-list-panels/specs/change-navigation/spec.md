@@ -1,18 +1,4 @@
-# change-navigation Specification
-
-## Purpose
-TBD - created by archiving change add-lazy-openspec-tui. Update Purpose after archive.
-## Requirements
-### Requirement: Changes grouped by lifecycle
-The Changes panel SHALL list changes grouped by lifecycle state — draft (no tasks), active (some tasks done), and completed (all tasks done) — and SHALL show a progress indicator and completion percentage for active changes.
-
-#### Scenario: Grouped listing
-- **WHEN** the Changes panel renders with a mix of draft, active, and completed changes
-- **THEN** each change appears under its correct lifecycle group with a status glyph, and active changes display a progress bar and percentage derived from their task counts
-
-#### Scenario: Empty state
-- **WHEN** there are no changes in the resolved OpenSpec root
-- **THEN** the Changes panel shows an explicit empty-state message rather than an empty box
+## MODIFIED Requirements
 
 ### Requirement: Change preview
 The application SHALL render, in the main pane, a live preview of the currently selected change as the selection moves, without requiring the user to press `enter`. The preview SHALL be a tabbed view whose tabs are `overview · proposal · specs · design · tasks`, opening on the `overview` tab, which shows the change's lifecycle state, task progress, and per-artifact completion status. The remaining tabs SHALL render the corresponding artifact content (proposal/design/tasks prose, and the change's spec deltas). The active tab SHALL persist as the selection moves from one change to another, rather than resetting to `overview`, so that a chosen artifact can be skimmed across successive changes.
@@ -74,4 +60,3 @@ The Archive panel SHALL list archived changes and preview their artifacts read-o
 #### Scenario: Switch archived tabs from the list
 - **WHEN** an archived change is selected, the Archive panel holds focus, and the user presses `]`
 - **THEN** the preview's active tab advances and renders that archived change's artifact from disk, with focus remaining on the list
-

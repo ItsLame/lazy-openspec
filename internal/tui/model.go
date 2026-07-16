@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"time"
+
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/itslame/lazy-openspec/internal/openspec"
@@ -27,7 +29,11 @@ const (
 	numPanels
 )
 
-var panelTitles = [numPanels]string{"1 Changes", "2 Specs", "3 Archive"}
+// panelTitles carry the panel's jump key the way lazygit/lazydocker do: the key
+// in square brackets, joined to the name by the frame's own horizontal rune
+// (U+2500, not a hyphen), so the label reads as part of the top border —
+// `╭─[1]─Changes────╮`.
+var panelTitles = [numPanels]string{"[1]─Changes", "[2]─Specs", "[3]─Archive"}
 
 type artifactTab int
 
@@ -106,6 +112,9 @@ type Model struct {
 	// incremental search over the focused preview
 	search searchState
 
+	// incremental filter over the focused list panel
+	filter listFilter
+
 	// actions overlay
 	showActions bool
 
@@ -114,6 +123,10 @@ type Model struct {
 	logs    []string
 	cmdCh   chan tea.Msg
 	running bool
+
+	// data freshness: the terminal is stale-while-blurred and refreshes on regain
+	blurred     bool
+	lastRefresh time.Time
 
 	showHelp bool
 	confirm  *confirmState
@@ -188,16 +201,64 @@ func (m Model) layout() dims {
 	return d
 }
 
-// selectedChange returns the currently highlighted change summary, if any.
+// ---- visible items ----------------------------------------------------------
+//
+// The list filter narrows a panel to the rows that match its query. Every reader
+// of a panel's items goes through these accessors, so m.sel[p] is by definition
+// an index into the *visible* slice and the selection helpers need no filter
+// awareness. m.changes / m.specs / m.archived are read nowhere else.
+
+// visibleChanges returns the Changes rows the panel actually renders.
+func (m Model) visibleChanges() []openspec.ChangeSummary {
+	return filterChanges(m.changes, m.filter, panelChanges)
+}
+
+// visibleArchived returns the Archive rows the panel actually renders.
+func (m Model) visibleArchived() []openspec.ChangeSummary {
+	return filterChanges(m.archived, m.filter, panelArchive)
+}
+
+// visibleSpecs returns the Specs rows the panel actually renders.
+func (m Model) visibleSpecs() []openspec.SpecSummary {
+	if !m.filter.appliesTo(panelSpecs) {
+		return m.specs
+	}
+	out := make([]openspec.SpecSummary, 0, len(m.specs))
+	for _, s := range m.specs {
+		if m.filter.matches(s.Name) {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func filterChanges(in []openspec.ChangeSummary, f listFilter, p panel) []openspec.ChangeSummary {
+	if !f.appliesTo(p) {
+		return in
+	}
+	out := make([]openspec.ChangeSummary, 0, len(in))
+	for _, c := range in {
+		if f.matches(c.Name) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// selectedChange returns the currently highlighted change summary, if any. A
+// filter that matches nothing leaves the panel with no selection, so this
+// reports false and the preview falls back to its empty state.
 func (m Model) selectedChange() (openspec.ChangeSummary, bool) {
 	switch m.focus {
 	case panelChanges:
-		if i := m.sel[panelChanges]; i >= 0 && i < len(m.changes) {
-			return m.changes[i], true
+		v := m.visibleChanges()
+		if i := m.sel[panelChanges]; i >= 0 && i < len(v) {
+			return v[i], true
 		}
 	case panelArchive:
-		if i := m.sel[panelArchive]; i >= 0 && i < len(m.archived) {
-			return m.archived[i], true
+		v := m.visibleArchived()
+		if i := m.sel[panelArchive]; i >= 0 && i < len(v) {
+			return v[i], true
 		}
 	}
 	return openspec.ChangeSummary{}, false
@@ -206,24 +267,66 @@ func (m Model) selectedChange() (openspec.ChangeSummary, bool) {
 // selectedSpec returns the currently highlighted spec, if any.
 func (m Model) selectedSpec() (openspec.SpecSummary, bool) {
 	if m.focus == panelSpecs {
-		if i := m.sel[panelSpecs]; i >= 0 && i < len(m.specs) {
-			return m.specs[i], true
+		v := m.visibleSpecs()
+		if i := m.sel[panelSpecs]; i >= 0 && i < len(v) {
+			return v[i], true
 		}
 	}
 	return openspec.SpecSummary{}, false
 }
 
+// selectedName returns the name of the highlighted item in the focused panel,
+// or "" when nothing is selected.
+func (m Model) selectedName() string {
+	if c, ok := m.selectedChange(); ok {
+		return c.Name
+	}
+	if s, ok := m.selectedSpec(); ok {
+		return s.Name
+	}
+	return ""
+}
+
+// indexOfVisible returns name's index among panel p's visible rows, falling back
+// to the first row when the item is filtered out or the panel is empty.
+func (m Model) indexOfVisible(p panel, name string) int {
+	if name == "" {
+		return 0
+	}
+	switch p {
+	case panelChanges:
+		for i, c := range m.visibleChanges() {
+			if c.Name == name {
+				return i
+			}
+		}
+	case panelSpecs:
+		for i, s := range m.visibleSpecs() {
+			if s.Name == name {
+				return i
+			}
+		}
+	case panelArchive:
+		for i, c := range m.visibleArchived() {
+			if c.Name == name {
+				return i
+			}
+		}
+	}
+	return 0
+}
+
 // syncSelection makes the previewed-change / previewed-spec state follow the
-// current nav selection. When the identity changes it resets the tab to the
-// overview, scrolls to the top, and clears any active search, so the preview
-// always reflects the highlighted item.
+// current nav selection. When the identity changes it scrolls to the top and
+// clears any active search, so the preview always reflects the highlighted item.
+// The artifact tab is deliberately *not* reset: it is a view mode, not a
+// position within a document, so one tab choice serves a whole browsing pass.
 func (m *Model) syncSelection() {
 	if c, ok := m.selectedChange(); ok {
 		archived := m.focus == panelArchive
 		if c.Name != m.curChange || archived != m.curArchived {
 			m.curChange = c.Name
 			m.curArchived = archived
-			m.tab = tabOverview
 			m.taskCursor = 0
 			sub := "changes"
 			if archived {

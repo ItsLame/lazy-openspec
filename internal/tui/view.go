@@ -53,9 +53,32 @@ func (m Model) renderLeft(d dims) string {
 		}
 		body, focusLine := m.panelBody(p, d.leftW-4)
 		body = windowLines(body, bodyH, focusLine)
-		boxes = append(boxes, panelBox(panelTitles[p], body, d.leftW, h, m.focus == p))
+		boxes = append(boxes, panelBox(m.panelTitle(p), body, d.leftW, h, m.focus == p))
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, boxes...)
+}
+
+// panelTitle renders a panel's border title, appending the active filter query
+// (e.g. `[2]─Specs /nav`) so a narrowed row set always has a visible cause.
+// withBorderTitle truncates it if it outgrows the frame, so the border holds.
+func (m Model) panelTitle(p panel) string {
+	if !m.filter.appliesTo(p) {
+		return panelTitles[p]
+	}
+	q := "/" + m.filter.query
+	if m.filter.typing {
+		q += "▏"
+	}
+	return panelTitles[p] + " " + q
+}
+
+// emptyListText picks a panel's empty state. A filter matching nothing says so
+// explicitly rather than leaving an unexplained empty box.
+func (m Model) emptyListText(p panel, width int, empty string) string {
+	if m.filter.appliesTo(p) && m.filter.query != "" {
+		return mutedText.Render(trunc("No matches for "+m.filter.query, width))
+	}
+	return mutedText.Render(trunc(empty, width))
 }
 
 func (m Model) panelBody(p panel, width int) (string, int) {
@@ -71,13 +94,16 @@ func (m Model) panelBody(p panel, width int) (string, int) {
 }
 
 func (m Model) changesList(width int) (string, int) {
-	if len(m.changes) == 0 {
-		return mutedText.Render("No changes yet."), 0
+	vis := m.visibleChanges()
+	if len(vis) == 0 {
+		return m.emptyListText(panelChanges, width, "No changes yet."), 0
 	}
 	var lines []string
 	focusLine := 0
 	last := openspec.Lifecycle(-1)
-	for i, c := range m.changes {
+	// Iterating the visible rows means a lifecycle group whose every row is
+	// filtered out never emits a header.
+	for i, c := range vis {
 		if lc := c.Lifecycle(); lc != last {
 			if len(lines) > 0 {
 				lines = append(lines, "")
@@ -94,38 +120,57 @@ func (m Model) changesList(width int) (string, int) {
 	return strings.Join(lines, "\n"), focusLine
 }
 
+// specsList renders each spec as a right-aligned requirement-count gutter
+// followed by the name, so the counts form a readable column down the left edge
+// (the way lazygit leads a commit row with its timestamp) instead of trailing
+// names of varying length.
 func (m Model) specsList(width int) (string, int) {
-	if len(m.specs) == 0 {
-		return mutedText.Render("No specs yet."), 0
+	vis := m.visibleSpecs()
+	if len(vis) == 0 {
+		return m.emptyListText(panelSpecs, width, "No specs yet."), 0
+	}
+	// The gutter is as wide as the widest *visible* count, so a filter that hides
+	// the only two-digit spec reclaims the column instead of leaving it ragged.
+	counts := make([]string, len(vis))
+	gutter := 0
+	for i, s := range vis {
+		counts[i] = fmt.Sprintf("%dr", s.RequirementCount)
+		if n := len([]rune(counts[i])); n > gutter {
+			gutter = n
+		}
+	}
+	// Floor the name's budget: with the count leading the row, a truncation bug
+	// here would render a bare count with an empty name.
+	nameW := width - gutter - 2
+	if nameW < 3 {
+		nameW = 3
 	}
 	var lines []string
 	focusLine := 0
-	for i, s := range m.specs {
+	for i, s := range vis {
 		sel := i == m.sel[panelSpecs]
 		if sel {
 			focusLine = len(lines)
 		}
-		count := fmt.Sprintf("%dr", s.RequirementCount)
+		count := fmt.Sprintf("%*s", gutter, counts[i])
+		name := trunc(s.Name, nameW)
 		if sel && m.focus == panelSpecs {
-			text := fmt.Sprintf("▪ %s  %s", s.Name, count)
-			lines = append(lines, selectedItem.Render(fit(text, width)))
+			lines = append(lines, selectedItem.Render(fit(count+"  "+name, width)))
 		} else {
-			// Overhead is "▪ " (2) + "  " (2) + the count; truncate the name to fit.
-			name := trunc(s.Name, width-4-len([]rune(count)))
-			lines = append(lines, fmt.Sprintf("%s %s  %s",
-				lipglossColor("6", "▪"), name, faint(count)))
+			lines = append(lines, faint(count)+"  "+name)
 		}
 	}
 	return strings.Join(lines, "\n"), focusLine
 }
 
 func (m Model) archiveList(width int) (string, int) {
-	if len(m.archived) == 0 {
-		return mutedText.Render("No archived changes."), 0
+	vis := m.visibleArchived()
+	if len(vis) == 0 {
+		return m.emptyListText(panelArchive, width, "No archived changes."), 0
 	}
 	var lines []string
 	focusLine := 0
-	for i, c := range m.archived {
+	for i, c := range vis {
 		sel := i == m.sel[panelArchive]
 		if sel {
 			focusLine = len(lines)
@@ -303,6 +348,7 @@ func (m Model) renderHint() string {
 
 // shortHints returns the hint-bar bindings for the active pane. In the preview
 // the bindings depend on whether a change (tabs) or spec (requirements) is shown.
+// From the list, [ ] steer the preview's sections and / filters the panel.
 func (m Model) shortHints() []binding {
 	if m.activePane == panePreview {
 		if _, ok := m.selectedSpec(); ok {
@@ -310,7 +356,10 @@ func (m Model) shortHints() []binding {
 		}
 		return []binding{{"↑↓ j/k", "scroll"}, {"[ ]", "tab"}, {"space", "toggle"}, {"/", "search"}, {"esc", "list"}, {"?", "help"}}
 	}
-	return []binding{{"tab", "panel"}, {"↑↓", "move"}, {"⏎", "focus"}, {"v", "validate"}, {"x", "actions"}, {"?", "help"}, {"q", "quit"}}
+	if m.filter.active() {
+		return []binding{{"esc", "clear filter"}, {"⏎", "confirm"}, {"↑↓", "move"}, {"?", "help"}}
+	}
+	return []binding{{"tab", "panel"}, {"↑↓", "move"}, {"[ ]", "section"}, {"/", "filter"}, {"⏎", "focus"}, {"x", "actions"}, {"?", "help"}, {"q", "quit"}}
 }
 
 // ---- overlays ---------------------------------------------------------------

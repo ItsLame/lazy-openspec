@@ -3,14 +3,14 @@
 A [lazygit](https://github.com/jesseduffield/lazygit)/[lazydocker](https://github.com/jesseduffield/lazydocker)-style terminal UI for [OpenSpec](https://github.com/Fission-AI/OpenSpec). Browse changes and specs, read artifacts rendered beautifully, tick off tasks, and run the OpenSpec workflow commands — all from one keyboard-driven screen.
 
 ```
-┌─1 Changes────────────┐┌─ add-user-auth ─────────────── active · 3/5 ─┐
+┌─[1]─Changes──────────┐┌─ add-user-auth ─────────────── active · 3/5 ─┐
 │ Active               ││ proposal · specs · design · tasks            │
 │▸◉ add-user-auth  60% ││                                              │
 │ Draft                ││ 1. Backend auth              ██████░ 2/3     │
 │ ○ add-data-export    ││   ✔ 1.1 Add user model                       │
-├─2 Specs──────────────┤│ ▸ ☐ 1.3 Issue session tokens                 │
+├─[2]─Specs────────────┤│ ▸ ☐ 1.3 Issue session tokens                 │
 │ ▪ auth        4r     ││                                              │
-├─3 Archive────────────┤│ 2. Frontend                  ░░░░░░░ 0/2     │
+├─[3]─Archive──────────┤│ 2. Frontend                  ░░░░░░░ 0/2     │
 │ ▫ old-migration      ││   ☐ 2.1 Build login form      scroll 40% ────│
 └──────────────────────┘└──────────────────────────────────────────────┘
 ┌─ Command log ────────────────────────────────────────────────────────┐
@@ -79,6 +79,25 @@ lazy-openspec --store <id>   # target a registered OpenSpec store
 - `internal/tui` — the [Bubble Tea](https://github.com/charmbracelet/bubbletea)
   models, [Lip Gloss](https://github.com/charmbracelet/lipgloss) layout, and the
   streaming command runner.
+
+## Refresh on focus
+
+lazy-openspec refreshes itself when the terminal regains focus, so if an agent or
+a CLI in another pane edits `openspec/` while you are away, switching back shows
+current data — the lists *and* the open preview — without pressing `r`. Nothing is
+polled or fetched while the terminal is blurred, and your selection and scroll
+position are preserved across the refresh.
+
+This relies on terminal focus reporting (DEC mode 1004), supported by iTerm2,
+kitty, WezTerm, Alacritty, Ghostty, and Windows Terminal. Inside **tmux** it also
+needs:
+
+```sh
+set -g focus-events on   # ~/.tmux.conf
+```
+
+On terminals that do not report focus, no events arrive, nothing breaks, and `r`
+remains the manual refresh (which also reloads the preview, not just the lists).
 
 ## Notes
 
